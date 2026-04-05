@@ -32,6 +32,13 @@ import { SceneStatsOverlay, useStatsToggle } from "./components/SceneStats";
 const DEFAULT_LOCAL_SAMPLE_PATH = "/tmp/sharp-predict-sample/teaser.ply";
 const DEFAULT_REMOTE_SAMPLE_URL =
   "/@fs/private/tmp/sharp-predict-sample/teaser.ply";
+// 2026-04-05 | 修复 | 检测是否为生产环境（Docker 部署），生产环境下不自动加载本地示例
+// 设计思路：Vite dev server 运行在 5173 端口，生产构建部署后端口不同；
+//          通过 import.meta.env.DEV 判断是否为开发模式。
+const IS_DEV = import.meta.env.DEV;
+// 2026-04-05 | 新增 | 生产环境默认展示预生成的 .ply（由 Dockerfile entrypoint 生成）
+// 通过 Nginx /output/ alias 映射到容器内 /tmp/sharp-output/
+const DEFAULT_PROD_SAMPLE_URL = "/output/default/teaser.ply";
 // 2026-04-05 | 新增 | 默认示例图片（位于 web/public/teaser.png，Vite 静态服务）
 const DEFAULT_EXAMPLE_IMAGE = "/teaser.png";
 
@@ -135,18 +142,30 @@ type PredictStatus = "idle" | "uploading" | "predicting" | "done" | "error";
 const IMAGE_ACCEPT = ".jpg,.jpeg,.png,.webp,.heic,.heif,.bmp,.tiff";
 
 export default function App() {
+  // 2026-04-05 | 修复 | 开发环境加载本地示例（Vite /@fs），
+  //            生产环境加载预生成的 /output/default/teaser.ply。
   const initialSource = useMemo(
     () =>
-      createPathSource(DEFAULT_LOCAL_SAMPLE_PATH) ?? {
-        id: "fallback-default-sample",
-        kind: "path" as const,
-        label: DEFAULT_LOCAL_SAMPLE_PATH,
-        url: DEFAULT_REMOTE_SAMPLE_URL,
-        format: SceneFormat.Ply,
-      },
+      IS_DEV
+        ? (createPathSource(DEFAULT_LOCAL_SAMPLE_PATH) ?? {
+            id: "fallback-default-sample",
+            kind: "path" as const,
+            label: DEFAULT_LOCAL_SAMPLE_PATH,
+            url: DEFAULT_REMOTE_SAMPLE_URL,
+            format: SceneFormat.Ply,
+          })
+        : {
+            id: "prod-default-sample",
+            kind: "path" as const,
+            label: "默认示例 (teaser.ply)",
+            url: DEFAULT_PROD_SAMPLE_URL,
+            format: SceneFormat.Ply,
+          },
     [],
   );
-  const [inputPath, setInputPath] = useState(DEFAULT_LOCAL_SAMPLE_PATH);
+  const [inputPath, setInputPath] = useState(
+    IS_DEV ? DEFAULT_LOCAL_SAMPLE_PATH : "",
+  );
   const [activeSource, setActiveSource] = useState<ViewerSource | null>(
     initialSource,
   );
@@ -249,8 +268,11 @@ export default function App() {
         }
 
         const data = await response.json();
-        const { ply_path, duration_s, filename } = data as {
+        // 2026-04-05 | 优化 | 优先使用 ply_url（Docker/生产环境可直接 HTTP 访问），
+        //            回退到 ply_path（本地开发通过 Vite /@fs 映射）。
+        const { ply_path, ply_url, duration_s, filename } = data as {
           ply_path: string;
+          ply_url?: string;
           duration_s: number;
           filename: string;
         };
@@ -261,11 +283,17 @@ export default function App() {
         );
 
         // 自动加载生成的 .ply 到 viewer
-        const source = createPathSource(ply_path);
-        if (source) {
-          setInputPath(ply_path);
-          setActiveSource(source);
-        }
+        // 优先使用 ply_url（Nginx /output/ 映射），回退到绝对路径
+        const loadUrl = ply_url || ply_path;
+        const source: ViewerSource = {
+          id: `predict:${loadUrl}`,
+          kind: "path",
+          label: filename,
+          url: ply_url || normalizeLocalPathToFsUrl(ply_path),
+          format: SceneFormat.Ply,
+        };
+        setInputPath(ply_path);
+        setActiveSource(source);
       } catch (err) {
         setPredictStatus("error");
         const msg = err instanceof Error ? err.message : "Unknown error";
@@ -357,27 +385,30 @@ export default function App() {
 
         <hr className="section-divider" />
 
-        {/* ── 直接加载 .ply 路径 ── */}
-        <div className="control-group">
-          <label htmlFor="source-path" className="label-with-icon">
-            <FolderOpen size={16} />
-            通过本地路径加载 .ply
-          </label>
-          <div className="inline-row">
-            <input
-              id="source-path"
-              value={inputPath}
-              onChange={(event) => setInputPath(event.target.value)}
-              placeholder="/tmp/sharp-predict-sample/teaser.ply"
-            />
-            <button type="button" onClick={handleLoadPath}>
-              加载路径
-            </button>
+        {/* ── 直接加载 .ply 路径（仅开发环境，依赖 Vite /@fs 映射） ── */}
+        {/* 2026-04-05 | 修复 | 生产环境隐藏此功能，Docker 部署无 Vite dev server */}
+        {IS_DEV && (
+          <div className="control-group">
+            <label htmlFor="source-path" className="label-with-icon">
+              <FolderOpen size={16} />
+              通过本地路径加载 .ply
+            </label>
+            <div className="inline-row">
+              <input
+                id="source-path"
+                value={inputPath}
+                onChange={(event) => setInputPath(event.target.value)}
+                placeholder="/tmp/sharp-predict-sample/teaser.ply"
+              />
+              <button type="button" onClick={handleLoadPath}>
+                加载路径
+              </button>
+            </div>
+            <p className="hint-text">
+              本地绝对路径会自动转换为 Vite <code>/@fs</code> URL。
+            </p>
           </div>
-          <p className="hint-text">
-            本地绝对路径会自动转换为 Vite <code>/@fs</code> URL。
-          </p>
-        </div>
+        )}
 
         {/* ── 上传已有 splat 文件 ── */}
         <div className="control-group">
@@ -392,9 +423,12 @@ export default function App() {
               accept=".ply,.splat,.ksplat,.spz"
               onChange={handleUploadChange}
             />
-            <button type="button" onClick={handleLoadDefaultSample}>
-              加载示例
-            </button>
+            {/* 2026-04-05 | 修复 | "加载示例"依赖本地路径，生产环境隐藏 */}
+            {IS_DEV && (
+              <button type="button" onClick={handleLoadDefaultSample}>
+                加载示例
+              </button>
+            )}
           </div>
         </div>
 

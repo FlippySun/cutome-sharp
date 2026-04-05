@@ -1,0 +1,36 @@
+# 2026-04-05 | 新增 | SHARP Web 服务 Docker Compose 配置
+# 功能描述：单容器部署 SHARP 前后端服务
+# 设计思路：映射端口 8380 → 容器内 80（Nginx），
+#          挂载模型缓存卷避免每次重启重新下载 checkpoint。
+# 影响范围：创建并启动 cutome-sharp 容器
+# 潜在风险：CPU 推理较慢（1-3 分钟/张），内存消耗约 2-4GB
+
+services:
+  sharp-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cutome-sharp
+    restart: unless-stopped
+    ports:
+      - "8380:80"
+    volumes:
+      # 持久化模型 checkpoint 缓存，避免重启后重新下载
+      - sharp-model-cache:/root/.cache/torch
+      # 持久化预测输出（可选，调试用）
+      - sharp-output:/tmp/sharp-output
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SHARP_DEVICE=cpu
+    # 2026-04-05 | 修复 | 提高内存限制至 7G（VPS 总 7.7G），
+    # sharp predict CPU 推理峰值 ~6.3G，6G 限制导致 OOM kill。
+    deploy:
+      resources:
+        limits:
+          memory: 7G
+        reservations:
+          memory: 2G
+
+volumes:
+  sharp-model-cache:
+  sharp-output:

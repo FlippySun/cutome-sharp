@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import sys
 import time
@@ -34,9 +35,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 LOGGER = logging.getLogger(__name__)
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
-# sharp CLI 的绝对路径，使用项目 .venv 中的安装
+# 2026-04-05 | 修复 | sharp CLI 路径自动探测
+# 设计思路：优先使用项目 .venv 内的安装（本地开发），
+#          回退到系统 PATH 中的 sharp（Docker 部署时安装在 /usr/local/bin/sharp）。
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SHARP_BIN = PROJECT_ROOT / ".venv" / "bin" / "sharp"
+_venv_sharp = PROJECT_ROOT / ".venv" / "bin" / "sharp"
+_system_sharp = shutil.which("sharp")
+SHARP_BIN = _venv_sharp if _venv_sharp.exists() else Path(_system_sharp) if _system_sharp else _venv_sharp
 OUTPUT_BASE = Path("/tmp/sharp-output")
 
 # 支持的图片扩展名（与 sharp.utils.io.get_supported_image_extensions 一致）
@@ -47,9 +52,12 @@ app = FastAPI(title="SHARP Predict API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
+    # 2026-04-05 | 修复 | 添加生产域名，允许反代后的请求通过 CORS
     allow_origins=[
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "https://sharp.zhiz.chat",
+        "http://sharp.zhiz.chat",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -149,9 +157,13 @@ async def predict(
     LOGGER.info("Job %s: done in %.1fs → %s (%.1f MB)",
                 job_id, duration, ply_path, ply_path.stat().st_size / 1024 / 1024)
 
+    # 2026-04-05 | 优化 | 同时返回绝对路径和 HTTP 可访问的相对 URL
+    # 设计思路：本地开发时前端通过 Vite /@fs 加载绝对路径；
+    #          Docker 部署时通过 Nginx /output/ 映射加载。
     return {
         "job_id": job_id,
         "ply_path": str(ply_path),
+        "ply_url": f"/output/{job_id}/{ply_path.name}",
         "filename": ply_path.name,
         "duration_s": round(duration, 1),
     }

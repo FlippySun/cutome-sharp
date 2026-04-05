@@ -1,0 +1,14 @@
+# 2026-04-05 | 新增 | Docker 构建排除规则
+# 减少构建上下文大小，排除无关文件
+
+.git
+.venv
+.cursor
+.DS_Store
+*.pt
+web/node_modules
+web/dist
+__pycache__
+*.pyc
+*.egg-info
+.aider*

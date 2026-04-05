@@ -29,7 +29,9 @@ from sharp.utils.gaussians import (
     unproject_gaussians,
 )
 
-from .render import render_gaussians
+# 2026-04-05 | 修复 | 延迟导入 render_gaussians，避免在无 CUDA/gsplat 环境下
+# import 失败（render.py 顶层导入了 gsplat，CPU-only 部署不安装该包）。
+# 实际调用 render_gaussians 仅在 with_rendering=True 且 device=="cuda" 时发生。
 
 LOGGER = logging.getLogger(__name__)
 
@@ -148,6 +150,9 @@ def predict_cli(
         save_ply(gaussians, f_px, (height, width), output_path / f"{image_path.stem}.ply")
 
         if with_rendering:
+            # 2026-04-05 | 修复 | 延迟导入，仅在实际渲染时才加载 gsplat 依赖
+            from .render import render_gaussians
+
             output_video_path = (output_path / image_path.stem).with_suffix(".mp4")
             LOGGER.info("Rendering trajectory to %s", output_video_path)
 
