@@ -1,0 +1,5 @@
+# 2026-04-05 | 新增 | SHARP 预测 API 服务依赖
+# 功能描述：FastAPI 后端接收图片上传并调用 sharp predict 生成 .ply
+fastapi>=0.135
+uvicorn>=0.43
+python-multipart>=0.0.22
